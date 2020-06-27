@@ -1,6 +1,6 @@
 rm(list=ls()) # start with a clean R environment
 
-my_dir <- "My_dir" # path of the folder where your data are stored
+my_dir <- "D:/Postdoc_Uppsala" # path of the folder where your data are stored
 setwd(my_dir)
 
 # Required libraries ------------------------------------------------------------------
@@ -29,7 +29,7 @@ ref_raster <- raster("ref_raster_30k.grd")
 eu_raster <- raster("eu_ref_raster.tif")
 
 ## List of species to use:
-list_sp <- read.csv("Invasive_spp_to_use.csv",sep=";",header=F)
+list_sp <- read.csv("0Tables/Invasive_spp_to_use.csv",sep=";",header=F)
 list_sp <- list_sp[c(1,4,2,5:7,3,8:15),1] # select the column with the name consistent throughout the dataset, and in alphabetical order
 
 # Change "Mustela vison" by "Neovison vison", as it is named in new taxonomies
@@ -493,7 +493,7 @@ write.table(corr_acc,"Accesibility/corr_acc_a.txt")
 
 # MODELING ######################################################
 
-## 1. Handling iSDM pseudosabsences #############################
+## 1. Handling SDM pseudosabsences #############################
 ## Global models ####'''''''''''''''''''#########################
 
 ### Predictors: ----------------------------------------------------------------
@@ -716,7 +716,7 @@ table_disim_r_clean <- rbind(heading_mammals,table_disim_r_clean[1:9,],heading_b
 name1 <- paste("D:/Postdoc_Uppsala/Dissimilarity/",model1,model2,".txt",sep="")
 write.table(table_disim_r_clean, name1,row.names=FALSE)
 
-## 2. iSDM ######################################################
+## 2. SDM ######################################################
 ## European models ####'''''''''''''''''''#########################
 
 ## Predictors: ----------------------------------------------------------------
@@ -1488,11 +1488,11 @@ table_range <- rbind(heading_mammals,table_range[c(1:9),],heading_birds,table_ra
 dir_table <- paste("0Tables/",name_model_folder_r,"_range_filling.txt",sep="")
 write.table(table_range,dir_table,row.names = FALSE)
 
-# FIGURE: MESS ------------
 name_model_folder <- "REGIONAL5_30k" 
 model_class <- "regional"
+dataset_type <- "_presences_cert_30k" # presences_cert_na_30k # _presences_cert_30k
 
-table_count1 <- c()
+# FIGURE: MESS ------------
 
 for (i in 1:length(list_sp)) {
   
@@ -1514,31 +1514,71 @@ for (i in 1:length(list_sp)) {
   names(mess_current) <- c(names(pred_eu_sub), "rmess")
   
   # Save the multivariate environmental similarity surface:
-  file_mess <- paste("D:/Postdoc_Uppsala/MESS/Current_conditions_",sp2,".grd",sep="")
+  file_mess <- paste("D:/Postdoc_Uppsala/MESS/Current_conditions_",sp2,dataset_type,".grd",sep="")
   writeRaster(mess_current[[19]],file_mess,format="raster",prj=TRUE,overwrite=TRUE)
-  }
+}
+
+my_pattern <- paste("^Current_conditions_.*.",dataset_type,".grd$",sep="")
+
+mess_stack <- stack(list.files(path = "MESS/", pattern = my_pattern, full.names=TRUE))
+
+names(mess_stack) <- c(as.character(list_sp))
+
+mess_table <- as.data.frame(mess_stack,xy=TRUE)
+
+# Count the number of negative values per pixel: 
+count_neg <- function(x) {sum(x < 0, na.rm=TRUE)}
+
+mess_table$mess_neg <- apply(mess_table[,c(3:17)],1,count_neg)
+
+# Count the number of species present in each grid-cell to calculate the proportion instead of the absolute count of species with negative values
+count <- function(x) {sum(!is.na(x))}
+
+mess_table$tot_spp <- apply(mess_table[,c(3:17)],1,count)
+
+mess_table$prop_mess <-  mess_table$mess_neg / mess_table$tot_spp
+
+# Create a raster with coordinates
+count_neg_r <- rasterFromXYZ(mess_table[,c("x","y","mess_neg")])
+count_neg_r <- raster::mask(count_neg_r,eu_raster)
+
+my_raster <- paste("MESS/Count_neg_mess",dataset_type,sep="")
+writeRaster(count_neg_r,my_raster,format="raster",prj=TRUE,overwrite=TRUE)
+
+# Create a raster with coordinates
+prop_mess <- rasterFromXYZ(mess_table[,c("x","y","prop_mess")])
+prop_mess <- raster::mask(prop_mess,eu_raster)
+
+my_raster <- paste("MESS/Prop_neg_mess",dataset_type,sep="")
+writeRaster(prop_mess,my_raster,format="raster",prj=TRUE,overwrite=TRUE)
 
 # FIGURE: IGNORANCE MAPS ----------
-dataset <- "cert" # cert_na # cert
 
-for (i in 1:length(list_sp)) {
+# Europe ----
+for (i in 1:length(list_refs)) {
   
   setwd("D:/Postdoc_Uppsala")
-  # Species name:
-  sp <- list_sp[i]
-  sp2 <- sub(" ","_",sp)
-  sp3 <- sub("_",".",sp2)
+  # Family name:
+  fam <- list_refs[i]
   
   # Ni:
-  name_occ <- paste("Occ_vs_pres/",sp2,"_occ_",dataset,"_30k.shp",sep="")
-  spp_occ <- readOGR(name_occ)
+  name_occ <- paste("GBIF_all/",fam,".csv",sep="")
+  spp_occ <- fread(name_occ, select=c("family","species","decimalLatitude","decimalLongitude"),quote="")
+  names(spp_occ) <- c("family","species","y","x")
   spp_occ$pres <- 1
+  
+  # Assign these occurrences to our grid 
+  coord_data <- spp_occ[,c("x","y")]
+  extract1 <- raster::extract(eu_raster,coord_data,cellnumbers = T)
+  coord_raster_ref_sp <- as.data.frame(coordinates(eu_raster)[extract1[,1],])
+  df1 <- as.data.frame(coord_raster_ref_sp) # OCURRENCES
+  df1$pres <- 1
   
   # Add all cells of Europe to count them as 0:
   eu_table <- as.data.frame(eu_raster,xy=TRUE)
   eu_table <- na.omit(eu_table)
   
-  joint_eu <- merge(eu_table[,c("x","y")],spp_occ,by=c("x","y"),all.x=TRUE)
+  joint_eu <- merge(eu_table[,c("x","y")],df1,by=c("x","y"),all.x=TRUE)
   joint_eu$pres[is.na(joint_eu$pres)] <- 0
   joint_eu <- joint_eu[,c("x","y","pres")]
   
@@ -1554,6 +1594,60 @@ for (i in 1:length(list_sp)) {
   ign_raster <- raster::crop(ign_raster,eu_raster)
   ign_raster <- raster::mask(ign_raster,eu_raster)
   # Save
-  name_to_save4 <- paste("Maps/Ign3_index_",sp2,"_",dataset,".grd",sep="")
+  name_to_save4 <- paste("Maps/Fam_Ign3_eu_index_",fam,".grd",sep="")
   writeRaster(ign_raster,name_to_save4,format="raster",prj=TRUE,overwrite=TRUE)
 }
+
+# Calculate the average over all species ---
+mess_stack <- stack(list.files(path = "Maps/", pattern = "^Fam.*.grd$", full.names=TRUE))
+mean_ign <- calc(mess_stack, fun = mean, na.rm = T)
+mean_ign <- raster::crop(mean_ign,eu_raster)
+mean_ign <- raster::mask(mean_ign,eu_raster)
+
+writeRaster(mean_ign,"Maps/Mean_fam_ign3.grd",format="raster",prj=TRUE,overwrite=TRUE)
+
+
+# SUMMARY TABLE OF MESS, IGNORANCE VALUES AND CV ####################
+
+## Zones map
+zones_map <- raster("Maps/ZonesREGIONAL5_30kGLOBAL2_30k.grd")
+
+## Mean CV map
+cv_map <- raster("Maps/Mean_cv_REGIONAL5_30k_CV.grd")
+
+## Ignorance map
+ign_map <- raster("Maps/Mean_fam_ign3.grd")
+
+## MESS
+# Prop of spp per grid cell
+mess_map <- raster("MESS/Prop_neg_mess_presences_cert_30k.grd") # Prop of negative spp
+
+# All species 
+mess_stack <- stack(list.files(path = "MESS/", pattern = my_pattern, full.names=TRUE))
+names(mess_stack) <- c(as.character(list_sp))
+
+all_mess_df <- as.data.frame(mess_stack, xy=TRUE)
+all_mess_df$average <- rowMeans(all_mess_df[,c(3:17)])
+
+mess_av <- rasterFromXYZ(all_mess_df[,c("x","y","average")])
+
+# Stack and convert to table
+stack_all <- stack(zones_map,ign_map,mess_map,cv_map)
+stack_all_df <- as.data.frame(stack_all,xy=TRUE)
+names(stack_all_df) <- c("x","y","zone","ign","mess","cv")
+
+new_table <- aggregate(ign ~ zone, stack_all_df, mean)
+new_table$ign_min <- aggregate(ign ~ zone, stack_all_df, min)
+new_table$ign_max <- aggregate(ign ~ zone, stack_all_df, max)
+new_table$mess <- aggregate(mess ~ zone, stack_all_df, mean)
+new_table$mess_min <- aggregate(mess ~ zone, stack_all_df, min)
+new_table$mess_max <- aggregate(mess ~ zone, stack_all_df, max)
+new_table$cv <- aggregate(cv ~ zone, stack_all_df, mean)
+new_table$cv_min <- aggregate(cv ~ zone, stack_all_df, min)
+new_table$cv_max <- aggregate(cv ~ zone, stack_all_df, max)
+
+write.table(new_table,"Maps/table_ign_mess.csv",row.names = FALSE)
+
+
+## REPETIR LO DEL MESS CON EL NUMERO DE ESPECIES, PQ LA MEDIA SALE NEGATIVA Y NO ME DICE NADA (SI USO LA MEDIA DEBERIA ESTANDARIZAR O ALGO). PENSAR SI HACER MAPA O TABLA #####
+zone_ign <- sp::merge(zone_shp,new_table,by="zone",incomparables=NA)
